@@ -1,0 +1,28 @@
+FloatingRecorder - Installation Instructions
+==========================================
+
+QUICK START:
+1. Extract this ZIP file
+2. Double-click "FloatingRecorder.app" to run
+3. Grant microphone permission when prompted
+
+FEATURES:
+• Record audio and transcribe to text automatically
+• Global hotkey support for quick recording
+• Floating recorder interface
+• Auto-paste transcription to active applications
+
+TROUBLESHOOTING:
+If you get a security warning when opening:
+• Right-click FloatingRecorder.app → "Open"
+• Click "Open" in the security dialog
+• This is normal for apps not from the Mac App Store
+
+SYSTEM REQUIREMENTS:
+• macOS 14.0 or later
+• Microphone access
+
+SUPPORT:
+If you need help, please contact the developer.
+
+Thank you for using FloatingRecorder! 

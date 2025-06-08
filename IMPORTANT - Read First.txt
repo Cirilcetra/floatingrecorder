@@ -1,0 +1,36 @@
+⚠️  IMPORTANT: Security Warning Fix
+================================
+
+If you get a security warning when opening FloatingRecorder.app:
+
+🔧 EASY FIX:
+1. Double-click "Fix Security Warning.command"
+2. Click "Open" when prompted
+3. Wait for "Success" message
+4. Now double-click FloatingRecorder.app - it will work!
+
+🔧 MANUAL FIX (if script doesn't work):
+1. Open Terminal (Applications → Utilities → Terminal)
+2. Type: cd 
+3. Drag this folder into Terminal window
+4. Press Enter
+5. Type: xattr -cr FloatingRecorder.app
+6. Press Enter
+7. Now FloatingRecorder.app will open normally
+
+🔧 ALTERNATIVE FIX:
+1. Right-click FloatingRecorder.app
+2. Select "Open" 
+3. Click "Open" in the security dialog
+4. This only needs to be done once
+
+WHY DOES THIS HAPPEN?
+macOS blocks apps that aren't from the Mac App Store or signed with an Apple Developer certificate ($99/year). This is normal for open-source apps.
+
+THE APP IS SAFE:
+• No internet connection required
+• All processing happens locally
+• Open source code available
+• Used by many developers
+
+Questions? Check README.md for more details. 
