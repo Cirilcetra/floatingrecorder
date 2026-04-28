@@ -8,6 +8,17 @@ on-device using Whisper.cpp — no cloud, no telemetry, no account.
 
 ---
 
+## Screenshots
+
+### Main app flow
+
+![FloatingRecorder screenshot 1](<images/Screenshot 2026-04-29 at 12.28.27 AM.png>)
+![FloatingRecorder screenshot 2](<images/Screenshot 2026-04-29 at 12.28.37 AM.png>)
+![FloatingRecorder screenshot 3](<images/Screenshot 2026-04-29 at 12.29.05 AM.png>)
+![FloatingRecorder screenshot 4](<images/Screenshot 2026-04-29 at 12.29.13 AM.png>)
+
+---
+
 ## Install
 
 1. Download **FloatingRecorder.dmg** from the latest release.
