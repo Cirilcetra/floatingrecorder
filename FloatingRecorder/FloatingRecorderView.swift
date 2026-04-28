@@ -1,426 +1,374 @@
 import SwiftUI
+import AppKit
 
 struct FloatingRecorderView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var preferences: AppPreferences
+
     @State private var isProcessing = false
     @State private var errorMessage: String?
     @State private var transcribedText: String = ""
     @State private var recordingStartTime: Date?
     @State private var currentState: RecordingState = .idle
-    @State private var willAutoPaste: Bool = false
-    
+    @State private var deliveryHint: String = "Copied to clipboard"
+
     enum RecordingState {
         case idle
         case listening
         case transcribing
         case completed
+        case error
     }
-    
+
     var body: some View {
         ZStack {
-            // Background with clean design - no shadows
             RoundedRectangle(cornerRadius: dynamicCornerRadius)
-                .fill(Color.black)
+                .fill(Color.black.opacity(0.92))
                 .overlay {
                     RoundedRectangle(cornerRadius: dynamicCornerRadius)
-                        .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                        .fill(.ultraThinMaterial)
+                        .opacity(0.15)
                 }
-            
-            // Content based on state
-            switch currentState {
-            case .idle:
-                idleStateView
-            case .listening:
-                listeningStateView
-            case .transcribing:
-                transcribingStateView
-            case .completed:
-                completedStateView
+                .overlay {
+                    RoundedRectangle(cornerRadius: dynamicCornerRadius)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                }
+
+            Group {
+                switch currentState {
+                case .idle:         idleStateView
+                case .listening:    listeningStateView
+                case .transcribing: transcribingStateView
+                case .completed:    completedStateView
+                case .error:        errorStateView
+                }
             }
+            .transition(.opacity.combined(with: .scale(scale: 0.96)))
         }
         .frame(width: dynamicWidth, height: dynamicHeight)
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ShowFloatingRecorder"))) { _ in
-            // Window is being shown - check if we should auto-paste and start recording
-            checkAutoPasteStatus()
+        .animation(.spring(response: 0.45, dampingFraction: 0.78), value: currentState)
+        .onReceive(NotificationCenter.default.publisher(for: .showFloating)) { _ in
             if currentState == .idle {
                 startRecording()
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("HideFloatingRecorder"))) { _ in
-            // Window is being hidden - stop recording if active
+        .onReceive(NotificationCenter.default.publisher(for: .hideFloating)) { _ in
+            if currentState == .listening {
+                stopRecording()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .startPushToTalk)) { _ in
+            if currentState == .idle {
+                startRecording()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .stopPushToTalk)) { _ in
             if currentState == .listening {
                 stopRecording()
             }
         }
         .onAppear {
-            requestMicrophonePermission()
+            appState.audioRecorder.requestMicrophonePermission { granted in
+                if !granted { errorMessage = "Microphone access is required" }
+            }
         }
-        .animation(.spring(response: 0.5, dampingFraction: 0.7), value: currentState)
     }
-    
-    // MARK: - Dynamic Properties
+
+    // MARK: - Dimensions
+
     private var dynamicWidth: CGFloat {
         switch currentState {
         case .idle: return 80
         case .listening, .transcribing: return 360
         case .completed: return 400
+        case .error: return 340
         }
     }
-    
-    private var dynamicHeight: CGFloat {
-        switch currentState {
-        case .idle: return 80
-        case .listening, .transcribing, .completed: return 80
-        }
-    }
-    
-    private var dynamicCornerRadius: CGFloat {
-        switch currentState {
-        case .idle: return 40
-        case .listening, .transcribing, .completed: return 40
-        }
-    }
-    
-    // MARK: - State Views
+
+    private var dynamicHeight: CGFloat { currentState == .idle ? 80 : 80 }
+    private var dynamicCornerRadius: CGFloat { 40 }
+
+    // MARK: - State views
+
     private var idleStateView: some View {
         ZStack {
-            // Main content - centered
             Button(action: startRecording) {
                 ZStack {
                     Circle()
                         .fill(Color.red)
-                        .frame(width: 60, height: 60)
-                    
+                        .frame(width: 56, height: 56)
                     Image(systemName: "mic.fill")
-                        .font(.system(size: 24, weight: .medium))
-                        .foregroundColor(.white)
+                        .font(.system(size: 22, weight: .medium))
+                        .foregroundStyle(.white)
                 }
             }
             .buttonStyle(.plain)
             .disabled(isProcessing)
-            
-            // Close button - top right corner (only visible on hover or always visible)
+
             VStack {
                 HStack {
                     Spacer()
-                    closeButton
-                        .padding(.top, 6)
-                        .padding(.trailing, 6)
+                    closeButton.padding(.top, 6).padding(.trailing, 6)
                 }
                 Spacer()
             }
         }
     }
-    
+
     private var listeningStateView: some View {
         HStack(spacing: 0) {
-            // Close button on far left
-            closeButton
-                .padding(.leading, 16)
-            
-            // Stop button
+            closeButton.padding(.leading, 14)
+
             Button(action: stopRecording) {
                 ZStack {
-                    Circle()
-                        .fill(Color.red)
-                        .frame(width: 48, height: 48)
-                    
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(Color.white)
-                        .frame(width: 14, height: 14)
+                    Circle().fill(Color.red).frame(width: 44, height: 44)
+                    RoundedRectangle(cornerRadius: 2).fill(Color.white).frame(width: 12, height: 12)
                 }
             }
             .buttonStyle(.plain)
-            .padding(.leading, 12)
-            
-            // Audio waveform in the center
+            .padding(.leading, 10)
+
             HStack {
                 Spacer()
-                AudioVisualizer(isRecording: $appState.audioRecorder.isRecording)
-                    .frame(width: 140, height: 32)
+                AudioVisualizer(isRecording: appState.audioRecorder.isRecording)
+                    .frame(width: 140, height: 30)
                 Spacer()
             }
-            
-            // Status indicator and text
+
             HStack(spacing: 6) {
-                Circle()
-                    .fill(Color.red)
-                    .frame(width: 6, height: 6)
-                
-                Text("Listening...")
+                Circle().fill(Color.red).frame(width: 6, height: 6)
+                Text(appState.isPushToTalk ? "Hold to talk" : "Listening")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white)
+                    .foregroundStyle(.white)
             }
-            .padding(.trailing, 16)
+            .padding(.trailing, 14)
         }
-        .frame(maxWidth: .infinity)
     }
-    
+
     private var transcribingStateView: some View {
         HStack(spacing: 0) {
-            // Close button on far left
-            closeButton
-                .padding(.leading, 16)
-            
-            // Disabled stop button (visual consistency)
+            closeButton.padding(.leading, 14)
+
             ZStack {
-                Circle()
-                    .fill(Color.red.opacity(0.6))
-                    .frame(width: 48, height: 48)
-                
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.white)
-                    .frame(width: 14, height: 14)
+                Circle().fill(Color.orange.opacity(0.85)).frame(width: 44, height: 44)
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .tint(.white)
+                    .scaleEffect(0.8)
             }
-            .padding(.leading, 12)
-            
-            // Faded audio waveform in the center
+            .padding(.leading, 10)
+
             HStack {
                 Spacer()
-                AudioVisualizer(isRecording: $appState.audioRecorder.isRecording)
-                    .frame(width: 140, height: 32)
-                    .opacity(0.6)
+                AudioVisualizer(isRecording: appState.audioRecorder.isRecording)
+                    .frame(width: 140, height: 30)
+                    .opacity(0.5)
                 Spacer()
             }
-            
-            // Status indicator and text
+
             HStack(spacing: 6) {
-                Circle()
-                    .fill(Color.green)
-                    .frame(width: 6, height: 6)
-                
-                Text("Transcribing...")
+                Circle().fill(Color.orange).frame(width: 6, height: 6)
+                Text("Transcribing")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white)
+                    .foregroundStyle(.white)
             }
-            .padding(.trailing, 16)
+            .padding(.trailing, 14)
         }
-        .frame(maxWidth: .infinity)
     }
-    
+
     private var completedStateView: some View {
         HStack(spacing: 0) {
-            // Close button on far left
-            closeButton
-                .padding(.leading, 16)
-            
-            // Green microphone button
+            closeButton.padding(.leading, 14)
+
             ZStack {
-                Circle()
-                    .fill(Color.green)
-                    .frame(width: 48, height: 48)
-                
-                Image(systemName: "mic.fill")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundColor(.white)
+                Circle().fill(Color.green).frame(width: 44, height: 44)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white)
             }
-            .padding(.leading, 12)
-            
-            // Status text in center
+            .padding(.leading, 10)
+
             HStack {
                 Spacer()
                 HStack(spacing: 6) {
-                    Circle()
-                        .fill(Color.green)
-                        .frame(width: 6, height: 6)
-                    
-                    Text("Copied to clipboard")
+                    Circle().fill(Color.green).frame(width: 6, height: 6)
+                    Text(deliveryHint)
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white)
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
                 }
                 Spacer()
             }
-            
-            // Action buttons on the right
+
             HStack(spacing: 6) {
-                Button("Copy") {
-                    copyToClipboard()
-                }
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.white.opacity(0.9))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Color.white.opacity(0.15))
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .buttonStyle(.plain)
-                
-                Button("Record") {
-                    startNewRecording()
-                }
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.white.opacity(0.9))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Color.white.opacity(0.15))
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .buttonStyle(.plain)
+                pillButton("Copy", action: copyToClipboard)
+                pillButton("Record", action: startNewRecording)
             }
-            .padding(.trailing, 16)
+            .padding(.trailing, 14)
         }
-        .frame(maxWidth: .infinity)
     }
-    
-    // MARK: - Helper Views
+
+    private var errorStateView: some View {
+        HStack(spacing: 12) {
+            closeButton.padding(.leading, 14)
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 18))
+                .foregroundStyle(.orange)
+            Text(errorMessage ?? "Something went wrong")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white)
+                .lineLimit(2)
+                .padding(.trailing, 14)
+            Spacer(minLength: 0)
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func pillButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(.white.opacity(0.95))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.white.opacity(0.15))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .buttonStyle(.plain)
+    }
+
     private var closeButton: some View {
         Button(action: closeWindow) {
             Image(systemName: "xmark")
                 .font(.system(size: 10, weight: .bold))
-                .foregroundColor(.white.opacity(0.6))
+                .foregroundStyle(.white.opacity(0.65))
                 .frame(width: 20, height: 20)
                 .background(Color.white.opacity(0.08))
                 .clipShape(Circle())
         }
         .buttonStyle(.plain)
-        .onHover { hovering in
-            // Could add hover effect here if needed
-        }
     }
-    
+
     // MARK: - Actions
+
     private func startRecording() {
         guard !isProcessing else { return }
-        
-        print("🎬 FloatingRecorderView: Starting recording...")
         errorMessage = nil
         currentState = .listening
         recordingStartTime = Date()
         appState.audioRecorder.startRecording()
-        
-        print("🎬 FloatingRecorderView: Recording started, isRecording = \(appState.audioRecorder.isRecording)")
     }
-    
+
     private func stopRecording() {
-        print("🎬 FloatingRecorderView: Stopping recording...")
-        
         guard let audioURL = appState.audioRecorder.stopRecording() else {
-            print("🎬 FloatingRecorderView: ❌ Failed to stop recording")
             errorMessage = "Failed to stop recording"
-            currentState = .idle
+            currentState = .error
+            scheduleAutoHide(after: 2)
             return
         }
-        
-        print("🎬 FloatingRecorderView: Recording stopped successfully, transitioning to transcribing...")
+
         currentState = .transcribing
         isProcessing = true
-        
+
+        let previousApp = appState.lastActiveApp
+        let autoPaste = preferences.autoPasteEnabled
+
         Task {
             do {
                 let transcription = try await appState.transcriber.transcribeAudio(at: audioURL)
-                
+
                 await MainActor.run {
                     transcribedText = transcription
-                    
-                    // Add to history
+
                     let duration = recordingStartTime.map { Date().timeIntervalSince($0) }
-                    let item = TranscriptionItem(id: UUID(), text: transcription, timestamp: Date(), duration: duration)
-                    appState.history.addTranscription(item)
-                    
-                    // Auto-paste the transcription
-                    appState.transcriber.pasteText(transcription)
-                    
-                    // Save to file if needed
-                    saveTranscriptionToFile(transcription)
-                    
+                    if !transcription.isEmpty {
+                        let item = TranscriptionItem(id: UUID(), text: transcription, timestamp: Date(), duration: duration)
+                        appState.history.addTranscription(item)
+                        saveTranscriptionToFile(transcription)
+
+                        let accepts = appState.transcriber.focusedElementAcceptsText(in: previousApp)
+                        appState.transcriber.deliverText(
+                            transcription,
+                            previousApp: previousApp,
+                            autoPasteEnabled: autoPaste
+                        )
+                        deliveryHint = (autoPaste && accepts)
+                            ? "Pasted to \(previousApp?.localizedName ?? "app")"
+                            : "Copied to clipboard"
+                    } else {
+                        deliveryHint = "No speech detected"
+                    }
+
                     currentState = .completed
                     isProcessing = false
-                    
-                    // Auto-hide after 5 seconds (give user time to see buttons)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-                        if currentState == .completed {
-                            hideWindow()
-                        }
-                    }
+                    try? FileManager.default.removeItem(at: audioURL)
+                    scheduleAutoHide(after: 3.5)
                 }
             } catch {
                 await MainActor.run {
-                    errorMessage = "Transcription failed: \(error.localizedDescription)"
-                    currentState = .idle
+                    errorMessage = error.localizedDescription
+                    currentState = .error
                     isProcessing = false
-                    
-                    // Auto-hide on error after 2 seconds
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                        hideWindow()
-                    }
+                    try? FileManager.default.removeItem(at: audioURL)
+                    scheduleAutoHide(after: 2.5)
                 }
             }
         }
     }
-    
+
+    private func scheduleAutoHide(after seconds: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
+            if currentState == .completed || currentState == .error {
+                hideWindow()
+            }
+        }
+    }
+
     private func copyToClipboard() {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(transcribedText, forType: .string)
     }
-    
+
     private func startNewRecording() {
         currentState = .idle
         transcribedText = ""
         errorMessage = nil
-        
-        // Small delay then start new recording
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            startRecording()
-        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { startRecording() }
     }
-    
+
     private func hideWindow() {
         currentState = .idle
         transcribedText = ""
         errorMessage = nil
-        willAutoPaste = false
-        
-        // Notify AppDelegate to hide the window
-        NotificationCenter.default.post(name: NSNotification.Name("HideFloatingRecorder"), object: nil)
+        NotificationCenter.default.post(name: .hideFloating, object: nil)
     }
-    
+
     private func closeWindow() {
         currentState = .idle
         transcribedText = ""
         errorMessage = nil
-        willAutoPaste = false
-        
-        // Notify AppDelegate to close the window completely
-        NotificationCenter.default.post(name: NSNotification.Name("CloseFloatingRecorder"), object: nil)
+        NotificationCenter.default.post(name: .closeFloating, object: nil)
     }
-    
-    private func checkAutoPasteStatus() {
-        // Check if there's an active text field that we can paste to
-        willAutoPaste = appState.transcriber.canAutoPaste()
-    }
-    
-    private func requestMicrophonePermission() {
-        appState.audioRecorder.requestMicrophonePermission { granted in
-            if !granted {
-                errorMessage = "Microphone access is required"
-            }
-        }
-    }
-    
+
     private func saveTranscriptionToFile(_ transcription: String) {
         let timestamp = DateFormatter.filenameSafe.string(from: Date())
         let filename = "transcription_\(timestamp).txt"
-        let fileURL = appState.preferences.outputSaveLocation.appendingPathComponent(filename)
-        
+        let folder = appState.preferences.outputSaveLocation
+        let fileURL = folder.appendingPathComponent(filename)
+
         do {
-            // Create directory if it doesn't exist
-            try FileManager.default.createDirectory(
-                at: appState.preferences.outputSaveLocation,
-                withIntermediateDirectories: true,
-                attributes: nil
-            )
-            
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             try transcription.write(to: fileURL, atomically: true, encoding: .utf8)
         } catch {
-            print("Failed to save transcription to file: \(error)")
+            Log.ui.error("Save transcription failed: \(error.localizedDescription)")
         }
     }
 }
 
-// MARK: - Extensions
 extension DateFormatter {
     static let filenameSafe: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        return formatter
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        return f
     }()
-} 
+}

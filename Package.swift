@@ -12,22 +12,29 @@ let package = Package(
             targets: ["FloatingRecorder"]
         ),
     ],
-    dependencies: [
-        .package(url: "https://github.com/soffes/HotKey", from: "0.2.1")
-    ],
+    dependencies: [],
     targets: [
         .executableTarget(
             name: "FloatingRecorder",
-            dependencies: [
-                .product(name: "HotKey", package: "HotKey")
-            ],
+            dependencies: [],
             path: "FloatingRecorder",
+            exclude: [
+                "Info.plist"
+            ],
             resources: [
                 .process("Resources")
             ],
             swiftSettings: [
                 .unsafeFlags(["-enable-bare-slash-regex"])
+            ],
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "FloatingRecorder/Info.plist"
+                ])
             ]
         ),
     ]
-) 
+)

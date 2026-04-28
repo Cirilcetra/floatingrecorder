@@ -1,155 +1,189 @@
 import Foundation
 import CoreGraphics
 import AppKit
+import ApplicationServices
 
-class WhisperTranscriber: ObservableObject {
+final class WhisperTranscriber: ObservableObject {
     @Published var isTranscribing = false
+
+    private let modelManager: ModelManager
     private let whisperPath: String
-    private let modelPath: String
-    
-    init() {
-        // Get paths to bundled whisper executable and model
+
+    init(modelManager: ModelManager) {
+        self.modelManager = modelManager
+
         let bundle = Bundle.main
-        
-        // Path to bundled whisper executable
-        whisperPath = bundle.path(forResource: "whisper", ofType: nil, inDirectory: "whisper") ?? ""
-        
-        // Path to bundled model
-        modelPath = bundle.path(forResource: "ggml-base.en", ofType: "bin", inDirectory: "whisper") ?? ""
-        
-        print("🤖 WhisperTranscriber: Whisper path: \(whisperPath)")
-        print("🤖 WhisperTranscriber: Model path: \(modelPath)")
-        
-        // Verify files exist
-        setupWhisperIfNeeded()
-    }
-    
-    private func setupWhisperIfNeeded() {
-        // Check if whisper executable exists
+        self.whisperPath = bundle.path(forResource: "whisper", ofType: nil, inDirectory: "whisper") ?? ""
+
         if whisperPath.isEmpty || !FileManager.default.fileExists(atPath: whisperPath) {
-            print("❌ WhisperTranscriber: Whisper executable not found at: \(whisperPath)")
-            return
+            Log.whisper.error("Whisper executable not found at: \(self.whisperPath)")
+        } else if !FileManager.default.isExecutableFile(atPath: whisperPath) {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: whisperPath)
         }
-        
-        // Check if model exists
-        if modelPath.isEmpty || !FileManager.default.fileExists(atPath: modelPath) {
-            print("❌ WhisperTranscriber: Model file not found at: \(modelPath)")
-            return
-        }
-        
-        // Check if whisper is executable
-        if !FileManager.default.isExecutableFile(atPath: whisperPath) {
-            print("❌ WhisperTranscriber: Whisper file is not executable")
-            // Try to make it executable
-            do {
-                try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: whisperPath)
-                print("✅ WhisperTranscriber: Made whisper executable")
-            } catch {
-                print("❌ WhisperTranscriber: Failed to make whisper executable: \(error)")
-            }
-        }
-        
-        print("✅ WhisperTranscriber: Setup complete")
     }
-    
+
     func transcribeAudio(at url: URL) async throws -> String {
-        guard !whisperPath.isEmpty && !modelPath.isEmpty else {
-            throw NSError(domain: "WhisperTranscriber", code: 1, userInfo: [NSLocalizedDescriptionKey: "Whisper or model not found"])
+        guard !whisperPath.isEmpty, FileManager.default.fileExists(atPath: whisperPath) else {
+            throw NSError(domain: "WhisperTranscriber", code: 1, userInfo: [NSLocalizedDescriptionKey: "Whisper binary not found."])
         }
-        
-        await MainActor.run {
-            isTranscribing = true
+
+        guard let model = modelManager.activeModel else {
+            throw NSError(domain: "WhisperTranscriber", code: 2, userInfo: [NSLocalizedDescriptionKey: "No model installed. Download one in Preferences → Models."])
         }
-        defer { 
-            Task { @MainActor in
-                isTranscribing = false
-            }
+        let modelURL = modelManager.localURL(for: model)
+        guard FileManager.default.fileExists(atPath: modelURL.path) else {
+            throw NSError(domain: "WhisperTranscriber", code: 2, userInfo: [NSLocalizedDescriptionKey: "Active model is missing on disk."])
         }
-        
+
+        await MainActor.run { isTranscribing = true }
+        defer {
+            Task { @MainActor in self.isTranscribing = false }
+        }
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: whisperPath)
-        
-        // Set up arguments for whisper
         process.arguments = [
-            "-m", modelPath,      // Model path
-            "-f", url.path,       // Input file
-            "-nt",               // No timestamps
-            "--output-txt"       // Output format
+            "-m", modelURL.path,
+            "-f", url.path,
+            "-nt",
+            "--output-txt"
         ]
-        
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        
-        print("🤖 WhisperTranscriber: Starting transcription...")
-        print("🤖 WhisperTranscriber: Command: \(whisperPath) \(process.arguments?.joined(separator: " ") ?? "")")
-        
+
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+
+        let collectedOut = DataBox()
+        let collectedErr = DataBox()
+
+        stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            collectedOut.append(data)
+        }
+        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            collectedErr.append(data)
+        }
+
         try process.run()
         process.waitUntilExit()
-        
-        // Read any output/error
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let output = String(data: data, encoding: .utf8) ?? ""
-        if !output.isEmpty {
-            print("🤖 WhisperTranscriber: Process output: \(output)")
-        }
-        
-        // Check if process was successful
+
+        stdoutPipe.fileHandleForReading.readabilityHandler = nil
+        stderrPipe.fileHandleForReading.readabilityHandler = nil
+
         if process.terminationStatus != 0 {
-            throw NSError(domain: "WhisperTranscriber", code: 2, userInfo: [NSLocalizedDescriptionKey: "Whisper process failed with status \(process.terminationStatus). Output: \(output)"])
+            let errString = String(data: collectedErr.snapshot, encoding: .utf8) ?? ""
+            var detail = errString
+            if errString.contains("Library not loaded") || errString.contains("dyld") {
+                detail += "\n\nIf you see “different Team IDs”, rebuild the app with the latest build-and-dmg.sh (whisper CLI needs its own entitlements). Otherwise missing .dylibs: run scripts/bundle-whisper-dylibs.sh then rebuild the DMG (see README)."
+            }
+            Log.whisper.error("Whisper exit \(process.terminationStatus): \(errString)")
+            throw NSError(
+                domain: "WhisperTranscriber",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "Whisper failed (\(process.terminationStatus)): \(detail)"]
+            )
         }
-        
-        // Read the output from the generated .txt file
+
         let outputFile = url.appendingPathExtension("txt")
-        
         guard FileManager.default.fileExists(atPath: outputFile.path) else {
-            throw NSError(domain: "WhisperTranscriber", code: 3, userInfo: [NSLocalizedDescriptionKey: "Output file not found at: \(outputFile.path)"])
+            throw NSError(domain: "WhisperTranscriber", code: 4, userInfo: [NSLocalizedDescriptionKey: "Transcription output missing."])
         }
-        
+
         let transcription = try String(contentsOf: outputFile, encoding: .utf8)
-        
-        // Clean up the output file
         try? FileManager.default.removeItem(at: outputFile)
-        
-        print("✅ WhisperTranscriber: Transcription complete")
+
         return transcription.trimmingCharacters(in: .whitespacesAndNewlines)
     }
-    
-    func canAutoPaste() -> Bool {
-        // Check if there's an active text field by getting focused element
-        if let focusedApp = NSWorkspace.shared.frontmostApplication {
-            // Exclude our own app from auto-paste detection
-            if focusedApp.bundleIdentifier == Bundle.main.bundleIdentifier {
-                return false
-            }
-            
-            // For now, assume auto-paste is possible if there's a frontmost app
-            // In a more sophisticated implementation, we could use Accessibility APIs
-            // to check if the focused element accepts text input
-            return true
-        }
+
+    // MARK: - Smart paste
+
+    /// Returns true iff Accessibility reports a focused text-input UI in the previously-active app.
+    func focusedElementAcceptsText(in app: NSRunningApplication?) -> Bool {
+        guard let app else { return false }
+
+        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+        var focused: AnyObject?
+        let result = AXUIElementCopyAttributeValue(axApp, kAXFocusedUIElementAttribute as CFString, &focused)
+        guard result == .success, let element = focused else { return false }
+
+        var roleValue: AnyObject?
+        AXUIElementCopyAttributeValue(element as! AXUIElement, kAXRoleAttribute as CFString, &roleValue)
+        let role = roleValue as? String ?? ""
+
+        let acceptingRoles: Set<String> = [
+            "AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"
+        ]
+        if acceptingRoles.contains(role) { return true }
+
+        var settable: AnyObject?
+        AXUIElementCopyAttributeValue(element as! AXUIElement, kAXValueAttribute as CFString, &settable)
+        if settable is String { return true }
+
         return false
     }
-    
-    func pasteText(_ text: String) {
-        // First copy to clipboard
+
+    /// Copy to clipboard, optionally synthesize Cmd+V into the previously-active app.
+    /// - Returns: `.pasted` if we pasted into a focused text field, `.clipboardOnly` otherwise.
+    @discardableResult
+    func deliverText(_ text: String, previousApp: NSRunningApplication?, autoPasteEnabled: Bool) -> PasteOutcome {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
-        
-        // Add small delay to ensure clipboard is set
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            // Simulate Command+V to paste
-            let source = CGEventSource(stateID: .hidSystemState)
-            
-            let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true)  // 'V' key
-            let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false)
-            
-            keyDown?.flags = .maskCommand
-            keyUp?.flags = .maskCommand
-            
-            keyDown?.post(tap: .cghidEventTap)
-            keyUp?.post(tap: .cghidEventTap)
+
+        guard autoPasteEnabled else { return .clipboardOnly }
+
+        guard let app = previousApp else { return .clipboardOnly }
+        if #available(macOS 14.0, *) {
+            app.activate()
+        } else {
+            app.activate(options: [.activateIgnoringOtherApps])
         }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            guard let self else { return }
+            if self.focusedElementAcceptsText(in: app) {
+                Self.synthesizeCmdV()
+            } else {
+                Log.paste.info("Focused element does not accept text; left in clipboard only")
+            }
+        }
+        return .clipboardOnly
     }
-} 
+
+    private static func synthesizeCmdV() {
+        let source = CGEventSource(stateID: .hidSystemState)
+        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true)
+        let keyUp   = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false)
+        keyDown?.flags = .maskCommand
+        keyUp?.flags   = .maskCommand
+        keyDown?.post(tap: .cghidEventTap)
+        keyUp?.post(tap: .cghidEventTap)
+    }
+
+    enum PasteOutcome {
+        case pasted
+        case clipboardOnly
+    }
+}
+
+private final class DataBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ chunk: Data) {
+        lock.lock()
+        data.append(chunk)
+        lock.unlock()
+    }
+
+    var snapshot: Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return data
+    }
+}
+

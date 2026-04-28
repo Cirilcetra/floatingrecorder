@@ -1,68 +1,72 @@
 import SwiftUI
 import ServiceManagement
+import AVFoundation
+import AppKit
+import UniformTypeIdentifiers
 
 struct MainAppView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var preferences: AppPreferences
     @State private var selectedPanel: SidebarPanel = .preferences
-    
+    @State private var onboardingDismissBinding = true
+
     var body: some View {
+        Group {
+            if preferences.hasCompletedOnboarding {
+                mainChrome
+            } else {
+                OnboardingView(isPresented: $onboardingDismissBinding)
+                    .environmentObject(appState)
+                    .environmentObject(preferences)
+                    .environmentObject(appState.modelManager)
+            }
+        }
+    }
+
+    /// Preferences are not loaded under first-run onboarding (avoids duplicate Accessibility UI and timers).
+    private var mainChrome: some View {
         NavigationSplitView {
-            // Sidebar
             SidebarView(selectedPanel: $selectedPanel)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 250)
         } detail: {
-            // Detail view
             Group {
                 switch selectedPanel {
-                case .preferences:
-                    PreferencesView()
-                case .history:
-                    HistoryView()
+                case .preferences: PreferencesView()
+                case .history:     HistoryView()
                 }
             }
             .navigationTitle(selectedPanel.title)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .navigationSplitViewStyle(.balanced)
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ShowPreferences"))) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .showPreferences)) { _ in
             selectedPanel = .preferences
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ToggleFloatingRecorder"))) { _ in
-            toggleFloatingWindow()
-        }
-    }
-    
-    private func toggleFloatingWindow() {
-        // This will be handled by the floating window itself
-        // Just update the state here
-        appState.isFloatingWindowVisible.toggle()
     }
 }
 
-// MARK: - Sidebar Panel Enum
 enum SidebarPanel: String, CaseIterable {
-    case preferences = "preferences"
-    case history = "history"
-    
+    case preferences
+    case history
+
     var title: String {
         switch self {
         case .preferences: return "Preferences"
-        case .history: return "History"
+        case .history:     return "History"
         }
     }
-    
+
     var icon: String {
         switch self {
         case .preferences: return "gear"
-        case .history: return "clock.arrow.circlepath"
+        case .history:     return "clock.arrow.circlepath"
         }
     }
 }
 
-// MARK: - Sidebar View
 struct SidebarView: View {
     @Binding var selectedPanel: SidebarPanel
-    
+
     var body: some View {
         List(SidebarPanel.allCases, id: \.rawValue, selection: $selectedPanel) { panel in
             NavigationLink(value: panel) {
@@ -74,95 +78,26 @@ struct SidebarView: View {
     }
 }
 
-// MARK: - Preferences View
+// MARK: - Preferences
+
 struct PreferencesView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var preferences: AppPreferences
+    @EnvironmentObject private var models: ModelManager
+
     @State private var showingFolderPicker = false
-    
+    @State private var accessibilityTrusted: Bool = AccessibilityPermission.isTrusted
+    @State private var micStatus: AVAuthorizationStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+
+    private let permissionPollTimer = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
+
     var body: some View {
         Form {
-            Section {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Image(systemName: "waveform")
-                            .font(.system(size: 32))
-                            .foregroundColor(.blue)
-                        
-                        VStack(alignment: .leading) {
-                            Text("FloatingRecorder")
-                                .font(.title2)
-                                .fontWeight(.semibold)
-                            
-                            Text("Voice transcription powered by Whisper")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                        }
-                        
-                        Spacer()
-                    }
-                    
-                    Text("This app uses OpenAI's Whisper model (base.en) for accurate speech-to-text transcription. The model runs locally on your device for privacy.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.top, 4)
-                }
-                .padding(.vertical, 8)
-            } header: {
-                Text("About")
-            }
-            
-            Section {
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack {
-                        Text("Global Hotkey")
-                        Spacer()
-                        Picker("", selection: $appState.preferences.globalHotkey) {
-                            ForEach(AppPreferences.GlobalHotkey.allCases, id: \.self) { hotkey in
-                                Text(hotkey.rawValue).tag(hotkey)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .frame(width: 120)
-                    }
-                    
-                    Toggle("Launch on Startup", isOn: $appState.preferences.launchOnStartup)
-                        .onChange(of: appState.preferences.launchOnStartup) { _, newValue in
-                            toggleLaunchOnStartup(newValue)
-                        }
-                    
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Output Save Location")
-                            Spacer()
-                            Button("Choose Folder") {
-                                showingFolderPicker = true
-                            }
-                            .buttonStyle(.borderless)
-                        }
-                        
-                        Text(appState.preferences.outputSaveLocation.path)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .lineLimit(2)
-                            .truncationMode(.middle)
-                    }
-                }
-            } header: {
-                Text("Settings")
-            }
-            
-            Section {
-                HStack {
-                    Spacer()
-                    Button("Quit FloatingRecorder") {
-                        NSApplication.shared.terminate(nil)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    Spacer()
-                }
-                .padding(.vertical, 8)
-            }
+            aboutSection
+            generalSection
+            shortcutsSection
+            modelsSection
+            privacySection
         }
         .formStyle(.grouped)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -174,54 +109,326 @@ struct PreferencesView: View {
             switch result {
             case .success(let urls):
                 if let url = urls.first {
-                    appState.preferences.outputSaveLocation = url
+                    _ = url.startAccessingSecurityScopedResource()
+                    preferences.outputSaveLocation = url
                 }
             case .failure(let error):
-                print("Error selecting folder: \(error)")
+                Log.ui.error("Folder pick failed: \(error.localizedDescription)")
+            }
+        }
+        .onReceive(permissionPollTimer) { _ in
+            accessibilityTrusted = AccessibilityPermission.isTrusted
+            micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        }
+    }
+
+    // MARK: Sections
+
+    private var aboutSection: some View {
+        Section {
+            HStack(spacing: 16) {
+                Image(systemName: "waveform.circle.fill")
+                    .font(.system(size: 44))
+                    .foregroundStyle(.blue)
+                    .symbolRenderingMode(.hierarchical)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("FloatingRecorder")
+                        .font(.title2.weight(.semibold))
+                    Text("Local voice-to-text powered by Whisper")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Text("Version \(appVersion) (\(appBuild))")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer()
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    private var generalSection: some View {
+        Section("General") {
+            Toggle("Launch on startup", isOn: Binding(
+                get: { preferences.launchOnStartup },
+                set: { newValue in
+                    preferences.launchOnStartup = newValue
+                    toggleLaunchOnStartup(newValue)
+                }
+            ))
+
+            Toggle("Auto-paste into focused text field", isOn: Binding(
+                get: { preferences.autoPasteEnabled },
+                set: { preferences.autoPasteEnabled = $0 }
+            ))
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Output save location")
+                    Spacer()
+                    Button("Choose Folder…") { showingFolderPicker = true }
+                        .buttonStyle(.borderless)
+                }
+                Text(preferences.outputSaveLocation.path)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
             }
         }
     }
-    
+
+    private var shortcutsSection: some View {
+        Section("Shortcut") {
+            HStack {
+                Text("Global hotkey")
+                Spacer()
+                Picker("", selection: Binding(
+                    get: { preferences.hotkeyChord },
+                    set: { preferences.hotkeyChord = $0 }
+                )) {
+                    ForEach(HotkeyChord.presets, id: \.self) { chord in
+                        Text(chord.displayString).tag(chord)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 140)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Tap to toggle recording. Hold to push-to-talk (releases automatically transcribes and pastes).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 10) {
+                statusDot(ok: accessibilityTrusted)
+                Text(accessibilityTrusted
+                     ? "Accessibility permission granted"
+                     : "Accessibility permission required for global hotkey")
+                    .font(.callout)
+                Spacer()
+                if !accessibilityTrusted {
+                    Button("Open Settings") {
+                        AccessibilityPermission.openSettings()
+                    }
+                }
+            }
+
+            if !accessibilityTrusted {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "info.circle.fill")
+                        .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("macOS only detects Accessibility permission after the app restarts.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Quit & Relaunch") {
+                            AccessibilityPermission.relaunchApp()
+                        }
+                        .controlSize(.small)
+                    }
+                    Spacer()
+                }
+            }
+        }
+    }
+
+    private var modelsSection: some View {
+        Section("Speech models") {
+            Text("Whisper models run locally on your Mac. Larger models are more accurate but slower and take more disk space.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            ForEach(models.catalog) { model in
+                ModelRow(model: model)
+                    .environmentObject(models)
+                    .environmentObject(preferences)
+            }
+        }
+    }
+
+    private var privacySection: some View {
+        Section("Privacy") {
+            HStack(spacing: 10) {
+                statusDot(ok: micStatus == .authorized)
+                Text(micStatusText)
+                Spacer()
+                if micStatus != .authorized {
+                    Button("Open Settings") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                }
+            }
+
+            Text("Audio and transcriptions never leave your Mac.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - Helpers
+
+    @ViewBuilder
+    private func statusDot(ok: Bool) -> some View {
+        Circle()
+            .fill(ok ? Color.green : Color.orange)
+            .frame(width: 10, height: 10)
+    }
+
+    private var micStatusText: String {
+        switch micStatus {
+        case .authorized:  return "Microphone permission granted"
+        case .denied:      return "Microphone permission denied"
+        case .restricted:  return "Microphone access is restricted"
+        case .notDetermined: return "Microphone permission not requested yet"
+        @unknown default:  return "Microphone status unknown"
+        }
+    }
+
+    private var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+    }
+
+    private var appBuild: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+    }
+
     private func toggleLaunchOnStartup(_ enabled: Bool) {
         if #available(macOS 13.0, *) {
-            if enabled {
-                try? SMAppService.mainApp.register()
-            } else {
-                try? SMAppService.mainApp.unregister()
+            do {
+                if enabled {
+                    try SMAppService.mainApp.register()
+                } else {
+                    try SMAppService.mainApp.unregister()
+                }
+            } catch {
+                Log.app.error("Launch on startup toggle failed: \(error.localizedDescription)")
             }
         }
     }
 }
 
-// MARK: - History View
+// MARK: - Model row
+
+struct ModelRow: View {
+    let model: WhisperModel
+    @EnvironmentObject private var models: ModelManager
+    @EnvironmentObject private var preferences: AppPreferences
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(model.displayName)
+                        .font(.system(size: 13, weight: .medium))
+                    if preferences.activeModelId == model.id && isInstalled {
+                        Text("Active")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.blue, in: Capsule())
+                    }
+                }
+                Text("\(model.notes) • \(sizeText)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if case .downloading(let progress) = state {
+                    ProgressView(value: progress)
+                        .frame(maxWidth: 240)
+                }
+                if case .failed(let msg) = state {
+                    Text(msg).font(.caption).foregroundStyle(.red)
+                }
+            }
+            Spacer()
+            actionButtons
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var state: ModelState { models.states[model.id] ?? .notInstalled }
+    private var isInstalled: Bool {
+        if case .installed = state { return true }
+        return false
+    }
+
+    private var sizeText: String {
+        if model.approximateMB < 1024 {
+            return "~\(model.approximateMB) MB"
+        }
+        return String(format: "~%.1f GB", Double(model.approximateMB) / 1024.0)
+    }
+
+    @ViewBuilder
+    private var actionButtons: some View {
+        switch state {
+        case .notInstalled:
+            Button("Download") { models.download(model) }
+                .buttonStyle(.bordered)
+        case .installed:
+            HStack(spacing: 6) {
+                if preferences.activeModelId != model.id {
+                    Button("Use") { models.setActive(model) }
+                        .buttonStyle(.bordered)
+                }
+                Button(role: .destructive) {
+                    models.delete(model)
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .help("Remove this model")
+            }
+        case .downloading(let progress):
+            HStack(spacing: 6) {
+                Text("\(Int(progress * 100))%")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Button("Cancel") { models.cancelDownload(model) }
+                    .buttonStyle(.borderless)
+            }
+        case .verifying:
+            Text("Verifying…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .failed:
+            Button("Retry") { models.download(model) }
+                .buttonStyle(.bordered)
+        }
+    }
+}
+
+// MARK: - History
+
 struct HistoryView: View {
     @EnvironmentObject private var appState: AppState
     @State private var searchText = ""
-    
+
     var filteredHistory: [TranscriptionItem] {
-        if searchText.isEmpty {
-            return appState.history.items
-        } else {
-            return appState.history.items.filter { item in
-                item.text.localizedCaseInsensitiveContains(searchText)
-            }
+        if searchText.isEmpty { return appState.history.items }
+        return appState.history.items.filter {
+            $0.text.localizedCaseInsensitiveContains(searchText)
         }
     }
-    
+
     var body: some View {
         VStack(spacing: 0) {
-            // Search bar
             HStack {
                 Image(systemName: "magnifyingglass")
-                    .foregroundColor(.secondary)
-                
-                TextField("Search transcriptions...", text: $searchText)
+                    .foregroundStyle(.secondary)
+                TextField("Search transcriptions…", text: $searchText)
                     .textFieldStyle(.plain)
-                
                 if !searchText.isEmpty {
                     Button(action: { searchText = "" }) {
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
                 }
@@ -231,40 +438,37 @@ struct HistoryView: View {
             .overlay(
                 Rectangle()
                     .frame(height: 1)
-                    .foregroundColor(Color(NSColor.separatorColor)),
+                    .foregroundStyle(Color(NSColor.separatorColor)),
                 alignment: .bottom
             )
-            
-            // History list
+
             if filteredHistory.isEmpty {
                 VStack(spacing: 16) {
                     Image(systemName: searchText.isEmpty ? "waveform" : "magnifyingglass")
                         .font(.system(size: 48))
-                        .foregroundColor(.secondary)
-                    
-                    Text(searchText.isEmpty ? "No transcriptions yet" : "No matching transcriptions")
+                        .foregroundStyle(.secondary)
+                    Text(searchText.isEmpty ? "No transcriptions yet" : "No matches")
                         .font(.headline)
-                        .foregroundColor(.secondary)
-                    
-                    Text(searchText.isEmpty ? 
-                         "Start recording with your global hotkey to see transcriptions here" :
-                         "Try adjusting your search terms")
+                        .foregroundStyle(.secondary)
+                    Text(searchText.isEmpty
+                         ? "Press your global hotkey to start recording"
+                         : "Try a different search")
                         .font(.subheadline)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
                     ForEach(filteredHistory) { item in
-                        HistoryRowView(item: item) {
-                            // Copy action
-                            appState.transcriber.pasteText(item.text)
-                        } onDelete: {
-                            // Delete action
-                            print("DEBUG: Delete button clicked for item: \(item.id)")
-                            appState.history.removeTranscription(item)
-                        }
+                        HistoryRowView(item: item,
+                                       onCopy: {
+                            let pb = NSPasteboard.general
+                            pb.clearContents()
+                            pb.setString(item.text, forType: .string)
+                        },
+                                       onDelete: { appState.history.removeTranscription(item) }
+                        )
                     }
                 }
                 .listStyle(.inset)
@@ -273,10 +477,8 @@ struct HistoryView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
-                    Button("Clear All History") {
-                        appState.history.clearHistory()
-                    }
-                    .disabled(appState.history.items.isEmpty)
+                    Button("Clear All History") { appState.history.clearHistory() }
+                        .disabled(appState.history.items.isEmpty)
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -285,39 +487,24 @@ struct HistoryView: View {
     }
 }
 
-// MARK: - History Row View
 struct HistoryRowView: View {
     let item: TranscriptionItem
     let onCopy: () -> Void
     let onDelete: () -> Void
-    
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(item.timestamp, style: .date)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                
+                    .font(.caption).foregroundStyle(.secondary)
                 Text(item.timestamp, style: .time)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                
+                    .font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                
-                Button(action: onCopy) {
-                    Image(systemName: "doc.on.doc")
-                }
-                .buttonStyle(.borderless)
-                .help("Copy to clipboard")
-                
-                Button(action: onDelete) {
-                    Image(systemName: "trash")
-                        .foregroundColor(.red)
-                }
-                .buttonStyle(.borderless)
-                .help("Delete transcription")
+                Button(action: onCopy) { Image(systemName: "doc.on.doc") }
+                    .buttonStyle(.borderless).help("Copy to clipboard")
+                Button(action: onDelete) { Image(systemName: "trash").foregroundStyle(.red) }
+                    .buttonStyle(.borderless).help("Delete transcription")
             }
-            
             Text(item.text)
                 .font(.body)
                 .lineLimit(3)
@@ -325,4 +512,4 @@ struct HistoryRowView: View {
         }
         .padding(.vertical, 4)
     }
-} 
+}

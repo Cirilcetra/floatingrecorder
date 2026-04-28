@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+:root {
+  --background: #020617;
+  --foreground: #e2e8f0;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-mono: var(--font-mono), ui-monospace, monospace;
+  --animate-pulse-slow: pulse-slow 6s ease-in-out infinite;
+}
+
+@keyframes pulse-slow {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1.03);
+  }
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    min-height: 100vh;
+  }
+}
+
+@layer components {
+  .card-glass {
+    @apply border border-white/10 bg-slate-900/50 backdrop-blur-md;
+  }
+
+  .btn-primary {
+    @apply inline-flex min-h-11 min-w-[44px] items-center justify-center rounded-full bg-gradient-to-r from-cyan-500 to-cyan-400 px-6 text-sm font-semibold text-slate-950 shadow-lg shadow-cyan-500/25 transition hover:from-cyan-400 hover:to-cyan-300 hover:shadow-cyan-400/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400;
+  }
+
+  .code-inline {
+    @apply rounded border border-white/10 bg-slate-950/90 px-1.5 py-0.5 font-mono text-xs text-cyan-100/90;
+  }
+}
