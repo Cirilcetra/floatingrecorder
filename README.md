@@ -10,7 +10,7 @@ on-device using Whisper.cpp — no cloud, no telemetry, no account.
 
 ## Screenshots
 
-### Main app flo
+### Main app flow
 
 ![FloatingRecorder screenshot 1](<images/Screenshot 2026-04-29 at 12.28.27 AM.png>)
 ![FloatingRecorder screenshot 2](<images/Screenshot 2026-04-29 at 12.28.37 AM.png>)
@@ -21,7 +21,7 @@ on-device using Whisper.cpp — no cloud, no telemetry, no account.
 
 ## Install
 
-1. Download **FloatingRecorder.dmg** from the latest release.
+1. Download **FloatingRecorder.dmg** from [Releases](https://github.com/Cirilcetra/floatingrecorder/releases) (pick the latest tag and expand **Assets**). The DMG is not stored in the source tree on purpose (see [Publishing the DMG](#publishing-the-dmg) below).
 2. Open the DMG and drag **FloatingRecorder.app** to **Applications**.
 3. The first time you launch it, macOS will show a security warning — see
    [docs/INSTALL.md](docs/INSTALL.md) for the one-time allow step in System
@@ -30,6 +30,31 @@ on-device using Whisper.cpp — no cloud, no telemetry, no account.
    walks you through it).
 
 That's it.
+
+---
+
+## Publishing the DMG
+
+`*.dmg` (and `*.dmg.sha256`) are in [`.gitignore`](.gitignore), so they **never appear in the repository file browser** on GitHub. That is intentional: large binaries belong in **GitHub Releases**, not in git history.
+
+To distribute the build:
+
+1. On GitHub: **Releases** → **Draft a new release**.
+2. Create or select a tag (for example `v1.0.1`).
+3. Under **Attach binaries**, upload the files from `build/output/` after `./build-and-dmg.sh` finishes — at least `FloatingRecorder.dmg`, and optionally `FloatingRecorder.dmg.sha256`.
+4. **Publish release**. Downloads show under **Assets** on that release page.
+
+Release assets can be up to **2 GB** each. The **100 MB** limit applies only to files committed to the repo, not to release attachments.
+
+With [GitHub CLI](https://cli.github.com/) (`gh auth login` first):
+
+```bash
+gh release create v1.0.1 \
+  build/output/FloatingRecorder.dmg \
+  build/output/FloatingRecorder.dmg.sha256 \
+  --title "FloatingRecorder v1.0.1" \
+  --notes "Short release notes."
+```
 
 ---
 

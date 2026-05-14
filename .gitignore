@@ -129,5 +129,3 @@ FloatingRecorder/Resources/whisper/*.bin
 # Build/distribution outputs
 dist/
 FloatingRecorder/FloatingRecorderTest
-*.dmg
-*.dmg.sha256
