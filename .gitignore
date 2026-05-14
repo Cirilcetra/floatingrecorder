@@ -120,6 +120,7 @@ Temporary Items
 *.zip
 
 # Built app
+*.app
 
 # Dependencies
 whisper.cpp/
