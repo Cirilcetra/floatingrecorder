@@ -21,7 +21,7 @@ on-device using Whisper.cpp — no cloud, no telemetry, no account.
 
 ## Install
 
-1. Download **FloatingRecorder.dmg** from [Releases](https://github.com/Cirilcetra/floatingrecorder/releases) (pick the latest tag and expand **Assets**). The DMG is not stored in the source tree on purpose (see [Publishing the DMG](#publishing-the-dmg) below).
+1. Download **FloatingRecorder.dmg** from [this Google Drive folder](https://drive.google.com/drive/folders/1R4wZoFM2MRBEF380AtY_QUsAdQr-y0Um?usp=drive_link). Open the folder, choose the latest DMG, and download it. (DMGs are not stored in the GitHub repo; maintainers can also use [Publishing the DMG](#publishing-the-dmg).)
 2. Open the DMG and drag **FloatingRecorder.app** to **Applications**.
 3. The first time you launch it, macOS will show a security warning — see
    [docs/INSTALL.md](docs/INSTALL.md) for the one-time allow step in System
